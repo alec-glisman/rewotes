@@ -10,6 +10,9 @@ from sklearn.metrics import (
     mean_squared_error,
 )
 from sklearn.model_selection import KFold, RandomizedSearchCV
+from skorch import NeuralNetRegressor
+import torch
+from torch import nn
 import xgboost as xgb
 
 
@@ -52,6 +55,17 @@ class MaterialsModels:
         y_test: np.ndarray,
         save: bool = True,
     ) -> None:
+        """Initialize the MaterialsModels class.
+
+        Args:
+            x_train (np.ndarray): The training features.
+            y_train (np.ndarray): The training labels.
+            x_test (np.ndarray): The testing features.
+            y_test (np.ndarray): The testing labels.
+            save (bool, optional): Whether to save the trained model and
+            metrics. Defaults to True.
+        """
+
         self.x_train = x_train
         self.y_train = y_train
         self.x_test = x_test
@@ -132,7 +146,7 @@ class XGBoostModels(MaterialsModels):
             param_grid (dict): The parameter grid for the grid search.
             Defaults to None.
             cv (int, optional): The number of cross-validation folds.
-            Defaults to 5.
+            Defaults to 10.
             seed (int, optional): The random seed for the train-test split.
             Defaults to 42.
 
@@ -200,6 +214,198 @@ class XGBoostModels(MaterialsModels):
             self._dir_out.mkdir(exist_ok=True)
             pd.DataFrame(self.metrics, index=[0]).to_csv(
                 self._dir_out / "xgboost_metrics.csv", index=False
+            )
+
+        return self.metrics
+
+
+class NeuralNetModels(MaterialsModels):
+    """
+    This class represents a set of PyTorch models for materials data.
+
+    It inherits from the MaterialsModels base class and implements the
+    train_models method specifically for PyTorch models. It uses
+    cross-validation and grid search for training.
+
+    Attributes:
+        model: The trained model.
+        metrics: The evaluation metrics for the model.
+        x_train: The training data.
+        y_train: The training labels.
+        x_test: The test data.
+        y_test: The test labels.
+    """
+
+    class Net(nn.Module):
+        """A simple feedforward neural network.
+
+        Args:
+            nn (Module): The PyTorch neural network module.
+        """
+
+        def __init__(
+            self,
+            input_size,
+            hidden_size,
+            output_size,
+            num_layers,
+            dropout,
+            activation=nn.ReLU(),
+        ):
+            """Initialize the neural network.
+
+            Args:
+                input_size (int): The size of the input layer.
+                hidden_size (int): The size of the hidden layers.
+                output_size (int): The size of the output layer.
+                num_layers (int): The number of hidden layers.
+                dropout (float): The dropout rate.
+                activation (nn.Module, optional): The activation function.
+                Defaults to nn.ReLU().
+            """
+
+            super(NeuralNetModels.Net, self).__init__()
+            # make a list of hidden layers
+            layers = []
+            # input layer
+            layers.append(nn.Linear(input_size, hidden_size))
+            layers.append(activation)
+            layers.append(nn.Dropout(dropout))
+            # hidden layers
+            for _ in range(1, num_layers):
+                layers.append(nn.Linear(hidden_size, hidden_size))
+                layers.append(activation)
+                layers.append(nn.Dropout(dropout))
+            # output layer
+            layers.append(nn.Linear(hidden_size, output_size))
+            self.net = nn.Sequential(*layers)
+
+        def forward(self, x):
+            """Forward pass of the neural network.
+
+            Args:
+                x (torch.Tensor): The input data.
+            """
+            return self.net(x)
+
+    def __init__(
+        self,
+        x_train: np.ndarray,
+        y_train: np.ndarray,
+        x_test: np.ndarray,
+        y_test: np.ndarray,
+        save: bool = True,
+    ) -> None:
+        """Initialize the MaterialsModels class.
+
+        Args:
+            x_train (np.ndarray): The training features.
+            y_train (np.ndarray): The training labels.
+            x_test (np.ndarray): The testing features.
+            y_test (np.ndarray): The testing labels.
+            save (bool, optional): Whether to save the trained model and
+            metrics. Defaults to True.
+        """
+        super().__init__(x_train, y_train, x_test, y_test, save)
+
+        # convert x and y to torch tensors of type float
+        self.x_train = torch.tensor(x_train, dtype=torch.float32)
+        self.y_train = torch.tensor(y_train, dtype=torch.float32)
+        self.x_test = torch.tensor(x_test, dtype=torch.float32)
+        self.y_test = torch.tensor(y_test, dtype=torch.float32)
+
+    def train_models(
+        self,
+        param_grid: dict = None,
+        cv: int = 3,
+        seed: int = 42,
+        epochs: int = 50,
+    ) -> NeuralNetRegressor:
+        """Train PyTorch models with cross-validation and grid search.
+
+        Args:
+            param_grid (dict): The parameter grid for the grid search.
+            Defaults to None.
+            cv (int, optional): The number of cross-validation folds.
+            Defaults to 3.
+            seed (int, optional): The random seed for the train-test split.
+            Defaults to 42.
+            epochs (int, optional): The number of training epochs.
+            Defaults to 50.
+
+        Returns:
+            NeuralNetRegressor: The best trained PyTorch model.
+        """
+        if param_grid is None:
+            param_grid = {
+                "module__hidden_size": randint(20, 250),
+                "module__num_layers": randint(4, 7),
+                "module__dropout": uniform(0.0, 0.2),
+                "lr": uniform(0.001, 0.1),
+            }
+        input_size = self.x_train.shape[1]
+        output_size = self.y_train.shape[1]
+
+        torch.manual_seed(seed)
+        net = NeuralNetRegressor(
+            module=self.Net,
+            module__input_size=input_size,
+            module__hidden_size=15,
+            module__output_size=output_size,
+            module__num_layers=4,
+            module__dropout=0.01,
+            max_epochs=epochs,
+            lr=0.1,
+            optimizer=torch.optim.SGD,
+        )
+
+        kfold = KFold(n_splits=cv, random_state=seed, shuffle=True)
+        random_search = RandomizedSearchCV(
+            net,
+            param_distributions=param_grid,
+            n_iter=2,
+            scoring="neg_mean_squared_error",
+            n_jobs=-1,
+            cv=kfold.split(self.x_train, self.y_train),
+            verbose=3,
+            random_state=seed,
+        )
+        random_search.fit(self.x_train, self.y_train)
+        best_model = random_search.best_estimator_
+        self.model = best_model
+
+        params = random_search.best_params_
+        print(f"Best Model:\n{best_model}")
+
+        # train the best model on the full training set
+        best_model.fit(self.x_train, self.y_train)
+        y_pred = best_model.predict(self.x_test)
+        mse = mean_squared_error(self.y_test, y_pred)
+        print(f"Mean Squared Error: {mse}")
+
+        if self.save:
+            self._dir_out.mkdir(exist_ok=True)
+            filename = self._dir_out / "neural_network_model.pkl"
+            with open(filename, "wb") as f:
+                torch.save(best_model, f)
+            pd.DataFrame(params, index=[0]).to_csv(
+                self._dir_out / "neural_network_params.csv", index=False
+            )
+
+        return self.model
+
+    def evaluate_model(self) -> dict:
+        """Evaluate the trained model.
+
+        Returns:
+            dict: The evaluation metrics.
+        """
+        super().evaluate_model()
+
+        if self.save:
+            self._dir_out.mkdir(exist_ok=True)
+            pd.DataFrame(self.metrics, index=[0]).to_csv(
+                self._dir_out / "neural_network_metrics.csv", index=False
             )
 
         return self.metrics

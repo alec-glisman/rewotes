@@ -26,9 +26,12 @@ Classes:
 
 from pathlib import Path
 
-from mp_api.client import MPRester
+import joblib
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+from mp_api.client import MPRester
 
 
 class MaterialData:
@@ -184,7 +187,8 @@ class MaterialData:
 
         Returns:
         - tuple: A tuple containing the train and test sets of the input
-        features and the target variable, as well as the material IDs.
+        features and the target variable, as well as the material IDs, and the
+        scaler used to scale the data.
         """
         if self.dataframe is None:
             self.get_data()
@@ -193,13 +197,23 @@ class MaterialData:
         mpid = self.dataframe["id"]
 
         # test/train split
-        x = self.dataframe.drop(columns=[target, "id"])
-        y = self.dataframe[target]
+        x = self.dataframe.drop(columns=[target, "id"]).to_numpy()
+        y = self.dataframe[target].to_numpy().reshape(-1, 1)
         x_train, x_test, y_train, y_test = train_test_split(
             x, y, test_size=test_size, random_state=seed, shuffle=True
         )
 
-        return x_train, x_test, y_train, y_test, mpid
+        # scale the training and testing data
+        scaler = StandardScaler()
+        x_train = scaler.fit_transform(x_train)
+        x_test = scaler.transform(x_test)
+
+        # save the scaler
+        if self.save:
+            scaler_filename = self._dir_output / "scaler.save"
+            joblib.dump(scaler, scaler_filename)
+
+        return x_train, x_test, y_train, y_test, mpid, scaler
 
     def add_data_columns(self, data: dict) -> None:
         """Add additional columns to the material data.

@@ -4,12 +4,16 @@ channels:
 dependencies:
   - pip
   - tqdm
+  - joblib
   - numpy
   - pandas
   - pytables
   - scipy
   - scikit-learn
   - xgboost
+  - pytorch
+  - torchvision
+  - skorch
   - matplotlib
   - pymatgen
   - phonopy

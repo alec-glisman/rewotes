@@ -16,7 +16,7 @@ named "api_key.txt" located in the same directory as this script.
 from pathlib import Path
 
 from src.data_load import MaterialData
-from src.models import XGBoostModels
+from src.models import XGBoostModels, NeuralNetModels
 
 
 def main() -> None:
@@ -28,7 +28,8 @@ def main() -> None:
       2. Loads data using the MaterialData class.
       3. Splits the data into training and testing sets.
       4. Trains models using the XGBoostModels class.
-      5. Prints a completion message.
+      5. Trains models using a Neural Network.
+      6. Prints a completion message.
 
     Returns:
         None
@@ -42,11 +43,13 @@ def main() -> None:
 
     # Load data
     data = MaterialData(api_key, band_gap=(0.0, 10.0))
-    x_train, x_test, y_train, y_test, _ = data.split_data(seed=seed)
+    x_train, x_test, y_train, y_test, _, _ = data.split_data(seed=seed)
 
     # Train models
     xgb = XGBoostModels(x_train, y_train, x_test, y_test, save=True)
     xgb.train_models(seed=seed)
+    nn = NeuralNetModels(x_train, y_train, x_test, y_test, save=True)
+    nn.train_models(seed=seed)
 
     # Notify user that the script has finished
     print("Script completed successfully.")
