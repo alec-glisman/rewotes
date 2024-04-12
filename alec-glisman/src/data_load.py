@@ -27,6 +27,7 @@ Classes:
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -196,9 +197,18 @@ class MaterialData:
         # extract ID for later use
         mpid = self.dataframe["id"]
 
+        x = self.dataframe.drop(columns=[target, "id"]).to_numpy(dtype=np.float64)
+        y = self.dataframe[target].to_numpy(dtype=np.float64).reshape(-1, 1)
+
+        # drop rows with NaN entries in x or y
+        mask_x = np.isnan(x).any(axis=1)
+        mask_y = np.isnan(y).flatten()
+        mask = mask_x | mask_y
+        x = x[~mask]
+        y = y[~mask]
+        mpid = mpid[~mask]
+
         # test/train split
-        x = self.dataframe.drop(columns=[target, "id"]).to_numpy()
-        y = self.dataframe[target].to_numpy().reshape(-1, 1)
         x_train, x_test, y_train, y_test = train_test_split(
             x, y, test_size=test_size, random_state=seed, shuffle=True
         )

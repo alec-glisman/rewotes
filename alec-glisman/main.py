@@ -48,8 +48,10 @@ def main() -> None:
     # Train models
     xgb = XGBoostModels(x_train, y_train, x_test, y_test, save=True)
     xgb.train_models(seed=seed)
+    xgb.evaluate_model()
     nn = NeuralNetModels(x_train, y_train, x_test, y_test, save=True)
     nn.train_models(seed=seed)
+    nn.evaluate_model()
 
     # Notify user that the script has finished
     print("Script completed successfully.")

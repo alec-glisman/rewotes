@@ -1,14 +1,21 @@
+"""
+This module contains classes for training and evaluating materials models.
+
+The module includes the following classes:
+- MaterialsModels: A base class for training and evaluating machine learning
+models on materials data.
+- XGBoostModels: A class for training and evaluating XGBoost models on
+materials data.
+- NeuralNetModels: A class for training and evaluating PyTorch models on
+materials data.
+"""
+
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.stats import uniform, randint
-from sklearn.metrics import (
-    auc,
-    accuracy_score,
-    confusion_matrix,
-    mean_squared_error,
-)
+from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold, RandomizedSearchCV
 from skorch import NeuralNetRegressor
 import torch
@@ -105,17 +112,11 @@ class MaterialsModels:
             dict: The evaluation metrics.
         """
         y_pred = self.model.predict(self.x_test)
-        accuracy = accuracy_score(self.y_test, y_pred)
-        confusion = confusion_matrix(self.y_test, y_pred)
         mse = mean_squared_error(self.y_test, y_pred)
-        aucp = auc(self.y_test, y_pred)
 
         self.metrics = {
-            "accuracy": accuracy,
-            "confusion_matrix": confusion,
             "mean_squared_error": mse,
             "root_mean_squared_error": np.sqrt(mse),
-            "auc": aucp,
         }
         return self.metrics
 
@@ -138,7 +139,7 @@ class XGBoostModels(MaterialsModels):
     """
 
     def train_models(
-        self, param_grid: dict = None, cv: int = 10, seed: int = 42
+        self, param_grid: dict = None, cv: int = 5, seed: int = 42
     ) -> xgb.XGBRegressor:
         """Train XGBoost models with cross-validation and grid search.
 
@@ -146,7 +147,7 @@ class XGBoostModels(MaterialsModels):
             param_grid (dict): The parameter grid for the grid search.
             Defaults to None.
             cv (int, optional): The number of cross-validation folds.
-            Defaults to 10.
+            Defaults to 5.
             seed (int, optional): The random seed for the train-test split.
             Defaults to 42.
 
@@ -173,10 +174,11 @@ class XGBoostModels(MaterialsModels):
         random_search = RandomizedSearchCV(
             model,
             param_distributions=param_grid,
-            n_iter=10,
+            n_iter=20,
             scoring="neg_mean_squared_error",
             n_jobs=-1,
             cv=kfold.split(self.x_train, self.y_train),
+            refit=True,
             verbose=3,
             random_state=seed,
         )
@@ -187,8 +189,6 @@ class XGBoostModels(MaterialsModels):
         params = random_search.best_params_
         print(f"Best Model:\n{best_model}")
 
-        # train the best model on the full training set
-        best_model.fit(self.x_train, self.y_train)
         y_pred = best_model.predict(self.x_test)
         mse = mean_squared_error(self.y_test, y_pred)
         print(f"Mean Squared Error: {mse}")
@@ -286,7 +286,8 @@ class NeuralNetModels(MaterialsModels):
             Args:
                 x (torch.Tensor): The input data.
             """
-            return self.net(x)
+            y = self.net(x)
+            return y
 
     def __init__(
         self,
@@ -319,7 +320,7 @@ class NeuralNetModels(MaterialsModels):
         param_grid: dict = None,
         cv: int = 3,
         seed: int = 42,
-        epochs: int = 50,
+        epochs: int = 40,
     ) -> NeuralNetRegressor:
         """Train PyTorch models with cross-validation and grid search.
 
@@ -331,22 +332,24 @@ class NeuralNetModels(MaterialsModels):
             seed (int, optional): The random seed for the train-test split.
             Defaults to 42.
             epochs (int, optional): The number of training epochs.
-            Defaults to 50.
+            Defaults to 40.
 
         Returns:
             NeuralNetRegressor: The best trained PyTorch model.
         """
         if param_grid is None:
             param_grid = {
-                "module__hidden_size": randint(20, 250),
-                "module__num_layers": randint(4, 7),
+                "module__hidden_size": randint(20, 300),
+                "module__num_layers": randint(4, 8),
                 "module__dropout": uniform(0.0, 0.2),
-                "lr": uniform(0.001, 0.1),
+                "lr": uniform(0.001, 0.01),
             }
         input_size = self.x_train.shape[1]
         output_size = self.y_train.shape[1]
 
+        # set seed for reproducibility
         torch.manual_seed(seed)
+
         net = NeuralNetRegressor(
             module=self.Net,
             module__input_size=input_size,
@@ -357,29 +360,48 @@ class NeuralNetModels(MaterialsModels):
             max_epochs=epochs,
             lr=0.1,
             optimizer=torch.optim.SGD,
+            optimizer__weight_decay=0.0005,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            batch_size=256,
         )
 
         kfold = KFold(n_splits=cv, random_state=seed, shuffle=True)
         random_search = RandomizedSearchCV(
             net,
             param_distributions=param_grid,
-            n_iter=2,
+            n_iter=20,
             scoring="neg_mean_squared_error",
-            n_jobs=-1,
+            n_jobs=3,
             cv=kfold.split(self.x_train, self.y_train),
             verbose=3,
             random_state=seed,
+            refit=False,
         )
         random_search.fit(self.x_train, self.y_train)
-        best_model = random_search.best_estimator_
-        self.model = best_model
 
-        params = random_search.best_params_
-        print(f"Best Model:\n{best_model}")
+        # find the best model from the search manually as refit is False
+        results = pd.DataFrame(random_search.cv_results_)
+        best_idx = results["rank_test_score"].idxmin()
+        best_params = results.loc[best_idx, "params"]
+        print(f"Best Parameters:\n{best_params}")
+        bestnet = NeuralNetRegressor(
+            module=self.Net,
+            module__input_size=input_size,
+            module__hidden_size=best_params["module__hidden_size"],
+            module__output_size=output_size,
+            module__num_layers=best_params["module__num_layers"],
+            module__dropout=best_params["module__dropout"],
+            max_epochs=epochs,
+            lr=best_params["lr"],
+            optimizer=torch.optim.SGD,
+            optimizer__weight_decay=0.0005,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            batch_size=256,
+        )
+        bestnet.fit(self.x_train, self.y_train)
+        self.model = bestnet
 
-        # train the best model on the full training set
-        best_model.fit(self.x_train, self.y_train)
-        y_pred = best_model.predict(self.x_test)
+        y_pred = self.model.predict(self.x_test)
         mse = mean_squared_error(self.y_test, y_pred)
         print(f"Mean Squared Error: {mse}")
 
@@ -387,8 +409,8 @@ class NeuralNetModels(MaterialsModels):
             self._dir_out.mkdir(exist_ok=True)
             filename = self._dir_out / "neural_network_model.pkl"
             with open(filename, "wb") as f:
-                torch.save(best_model, f)
-            pd.DataFrame(params, index=[0]).to_csv(
+                torch.save(self.model, f)
+            pd.DataFrame(best_params, index=[0]).to_csv(
                 self._dir_out / "neural_network_params.csv", index=False
             )
 
