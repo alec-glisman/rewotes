@@ -2,7 +2,9 @@
 
 **/.DS_Store
 *.pyc
-*.hdf5
+
+**/data/*
+**/models/*
 
 .vscode
 api_key.txt

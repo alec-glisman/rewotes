@@ -99,7 +99,7 @@ class MaterialData:
         self.save: bool = save
         self.kwargs: dict = kwargs
 
-        if not api_key:
+        if not isinstance(self.api_key, str) or not self.api_key:
             raise ValueError("API key must be provided")
 
         self.materials: list = None
@@ -196,7 +196,7 @@ class MaterialData:
         x = self.dataframe.drop(columns=[target, "id"])
         y = self.dataframe[target]
         x_train, x_test, y_train, y_test = train_test_split(
-            x, y, test_size=test_size, random_state=seed
+            x, y, test_size=test_size, random_state=seed, shuffle=True
         )
 
         return x_train, x_test, y_train, y_test, mpid
